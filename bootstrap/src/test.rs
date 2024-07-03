@@ -36,6 +36,10 @@ impl TestCommand {
                     cprint!("Compiling {}...", testcase.name);
                     testcase.build(manifest);
                 }
+                TestType::CompileLib => {
+                    cprint!("Compiling lib {}...", testcase.name);
+                    testcase.build_lib(manifest);
+                }
             }
             cprintln!("<g>OK</g>");
         }
@@ -49,16 +53,21 @@ impl TestCommand {
             let case = case.unwrap();
             let filename = case.file_stem().unwrap();
             if filename == "mini_core" {
+                // First compile mini_core
+                result.insert(
+                    0,
+                    TestCase {
+                        name: "mini_core".into(),
+                        source: case.clone(),
+                        output: manifest.out_dir.join(Path::new(filename)),
+                        test: TestType::CompileLib,
+                    },
+                );
                 continue;
             }
             let name = format!("example/{}", filename.to_string_lossy());
             let output = manifest.out_dir.join("example").join(Path::new(filename));
-            result.push(TestCase {
-                name,
-                source: case,
-                output,
-                test: TestType::Compile,
-            })
+            result.push(TestCase { name, source: case, output, test: TestType::Compile })
         }
 
         // Codegen tests
@@ -66,16 +75,8 @@ impl TestCommand {
             let case = case.unwrap();
             let filename = case.file_stem().unwrap();
             let name = format!("codegen/{}", filename.to_string_lossy());
-            let output = manifest
-                .out_dir
-                .join("tests/codegen")
-                .join(Path::new(filename));
-            result.push(TestCase {
-                name,
-                source: case,
-                output,
-                test: TestType::FileCheck,
-            })
+            let output = manifest.out_dir.join("tests/codegen").join(Path::new(filename));
+            result.push(TestCase { name, source: case, output, test: TestType::FileCheck })
         }
 
         result
@@ -84,6 +85,7 @@ impl TestCommand {
 
 pub enum TestType {
     Compile,
+    CompileLib,
     FileCheck,
 }
 
@@ -104,6 +106,19 @@ impl TestCase {
             .arg(&self.source)
             .arg("-o")
             .arg(&self.output);
+        log::debug!("running {:?}", command);
+        command.status().unwrap();
+    }
+
+    pub fn build_lib(&self, manifest: &Manifest) {
+        std::fs::create_dir_all(self.output.parent().unwrap()).unwrap();
+        let mut command = manifest.rustc();
+        command
+            .args(["--crate-type", "lib"])
+            .arg("-O")
+            .arg(&self.source)
+            .arg("--out-dir")
+            .arg(self.output.parent().unwrap());
         log::debug!("running {:?}", command);
         command.status().unwrap();
     }
@@ -141,10 +156,7 @@ impl FileChecker {
                 filename.ends_with(".c") && filename.starts_with(case.as_ref())
             });
 
-        assert!(
-            generated.is_some(),
-            "could not find {case}'s generated file"
-        );
+        assert!(generated.is_some(), "could not find {case}'s generated file");
         let generated = generated.unwrap();
 
         let generated = File::open(generated.path()).unwrap();
